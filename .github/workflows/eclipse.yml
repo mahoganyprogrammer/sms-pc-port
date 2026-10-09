@@ -1,4 +1,4 @@
-name: Build MSYS2 MinGW-w64new
+name: Build MSYS2 MinGW-w64
 
 on:
   push:
@@ -40,19 +40,11 @@ jobs:
         run: |
           git submodule update --init decomp
 
-      - name: Configure CMake
-        shell: msys2 {0}
-        run: |
-          cmake -S . -B build-ecl \
-            -DCMAKE_C_COMPILER=clang \
-            -DCMAKE_CXX_COMPILER=clang++ \
-            -DSMS_ARCH=64 \
-            -DSMS_ECLIPSE=ON
-
       - name: Build Project
         shell: msys2 {0}
         run: |
-          cmake --build build-ecl
+          chmod +x ./build.sh
+          SMS_ECLIPSE=1 SMS_ARCH=64 ./build.sh
 
       - name: Upload Build Artifact
         uses: actions/upload-artifact@v4
