@@ -7,6 +7,9 @@ on:
     branches: [ main, master ]
   workflow_dispatch:
 
+env:
+  SMS_DISC_IMAGE: "mods/eclipse/Super Mario Eclipse v1.1.0.iso"
+
 jobs:
   build:
     runs-on: windows-latest
@@ -29,6 +32,11 @@ jobs:
             mingw-w64-x86_64-python
             patch
             git
+
+      - name: Update Git Submodules
+        shell: msys2 {0}
+        run: |
+          git submodule update --init decomp
 
       - name: Configure CMake
         shell: msys2 {0}
