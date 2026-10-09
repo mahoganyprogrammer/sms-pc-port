@@ -50,5 +50,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: sms-build-windows
-          path: build-ecl/
+          path: build-windows-64/
           if-no-files-found: error
