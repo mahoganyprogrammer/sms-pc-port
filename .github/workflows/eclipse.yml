@@ -50,5 +50,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: sms-build-windows
-          path: windows-64-eclipse/
+          path: build/windows-64-eclipse/
           if-no-files-found: error
