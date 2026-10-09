@@ -123,14 +123,6 @@ fi
 exe="$bdir/sms$sms_exe_suffix"
 echo
 echo "Built $exe ($sms_os, $sms_arch-bit)"
-if [[ -n "$disc" ]]; then
-  cmake --build "$bdir" --target sms_standalone
-  if [[ "$sms_os" == macos ]]; then
-    echo "Built $bdir/SMS.app with the game from $disc inside"
-  else
-    echo "Built $(sms_standalone_exe) with the game from $disc inside"
-  fi
-  echo "Play: ./run.sh"
-else
-  echo "Play: ./run.sh /path/to/your/GMSE01.iso   (or put the image in rom/ and run ./run.sh)"
-fi
+echo "Play: ./run.sh"
+echo "Play: ./run.sh /path/to/your/GMSE01.iso   (or put the image in rom/ and run ./run.sh)"
+
