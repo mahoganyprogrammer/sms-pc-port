@@ -108,16 +108,7 @@ setup_windows() {
 
 "setup_$sms_os"
 
-disc="${1:-${SMS_DISC_IMAGE:-}}"
-[[ -n "$disc" || "$eclipse" == 1 ]] || disc=$(sms_find_rom)
-if [[ -n "$disc" ]]; then
-  [[ -f "$disc" ]] || sms_die "Disc image not found: $disc"
-  if [[ "$sms_os" == windows ]]; then
-    disc="$(cd "$(dirname "$disc")" && pwd -W)/$(basename "$disc")"
-  else
-    disc="$(cd "$(dirname "$disc")" && pwd)/$(basename "$disc")"
-  fi
-fi
+
 
 git submodule update --init decomp
 cmake -S . -B "$bdir" ${cmake_args[@]+"${cmake_args[@]}"} \
