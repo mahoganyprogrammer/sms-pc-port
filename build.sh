@@ -112,7 +112,7 @@ setup_windows() {
 
 git submodule update --init decomp
 cmake -S . -B "$bdir" ${cmake_args[@]+"${cmake_args[@]}"} \
-  -DSMS_ARCH="$sms_arch" -DSMS_GX_BUILD_TESTS=OFF -DSMS_BUNDLE_DISC="$disc"
+  -DSMS_ARCH="$sms_arch" -DSMS_GX_BUILD_TESTS=OFF 
 cmake --build "$bdir" --target sms --parallel "$(sms_jobs)"
 if [[ "$sms_os" == macos ]]; then
   # The executable finds SDL2.framework beside itself (@executable_path).
