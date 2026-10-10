@@ -31,13 +31,15 @@ RAWADDR_FIX = ("src/**/*.cpp", r"(\(\s*\([^;{}()]*\(\s*\*\s*\)\s*\([^;{}()]*\)\s
 
 # Game data by retail address, *(u32 **)0x8040E0BC: the port's object at that
 # address instead (platform/mods/eclipse/rawdata.cpp lists them).
-RAWDATA = "0x803ACA68|0x803ACAB0|0x803AFB48|0x803C0CC8|0x803C0CF0|0x803C0D18|0x803C0E30|0x803DF498|0x803DF4D8|0x803DFA00|0x8040DAB4|0x8040DABC|0x8040DFD4|0x8040DFE4|0x8040DFF4|0x8040E03C|0x8040E0BC|0x8040FA90"
+RAWDATA = "0x803ACA68|0x803ACAB0|0x803AFB48|0x803C0CC8|0x803C0CF0|0x803C0D18|0x803C0E30|0x803DF498|0x803DF4D8|0x803DFA00|0x8040DAB4|0x8040DABC|0x8040DFD4|0x8040DFE4|0x8040DFF4|0x8040E03C|0x8040E0BC|0x8040FA90|0x80412548|0x80415F4C|0x80415F68"
 RAWDATA_FIX = ("src/**/*.cpp", r"(\(\s*(?:const\s+)?[A-Za-z_][\w:<> ]*?\s*\*+\s*\))\s*(?i:(" + RAWDATA + r"))\b",
                lambda m: "%ssms_mod_rawdata(%s)" % (m.group(1), m.group(2)), "retail data addresses go to the port's objects")
 # The same through SMS_PORT_REGION(ntscu, pal, ntscj, ntsck), as BSE's
-# initAreaInfo names the game's shine and stage tables (area.cpp): unrouted,
-# it read the game's heap where the tables are on the console, and every area
-# of the base game had no scenarios and no shine select panes.
+# initAreaInfo names the game's shine and stage tables (area.cpp), BSE's boot
+# callback the glare's shine count and Eclipse's green Yoshi the tongue's
+# reach: unrouted, they read and wrote the game's heap, which the port keeps
+# where those are on the console (every area of the base game had no
+# scenarios and no shine select panes).
 RAWDATA_REGION_FIX = ("src/**/*.cpp", r"SMS_PORT_REGION\(\s*(?i:(" + RAWDATA + r"))\s*,[^()]*\)",
                       lambda m: "sms_mod_rawdata(%s)" % m.group(1), "retail data addresses go to the port's objects")
 
@@ -270,7 +272,27 @@ FRAME_RATE_FIXES = [
      "BSE reports the port's frame rate"),
 ]
 
-ECLIPSE_FIXES = optional(TEXTURE_FIXES) + CARD_IMAGE_FIXES + PARTICLE_FIXES + DEBS_FIXES + [RAWDATA_FIX] + BOOL_RET_FIXES + ECLIPSE_BE_FIXES + ECLIPSE_PATCH_TYPE_FIXES + [
+# The widescreen is the port's (widescreen setting): it widens the frame and
+# maps the game's 4:3 coordinates into it, with the area beside them visible.
+# BSE's own Aspect Ratio setting widened its menus' and overlays' projections
+# and moved their contents out by getScreenRatioAdjustX for its widescreen
+# patches, which the port waives (tools/mods/not_ported.txt): any value but
+# 4:3 squeezed BSE's and Eclipse's menus into the 4:3 area and pushed their
+# HUD-side text (Eclipse's pause menu Shine and blue coin counts) off the
+# left of the frame. BSE now always lays out for 4:3, as with its setting at
+# 4:3; the setting stays in the save, so the card files keep their layout,
+# but is hidden from the menu.
+ASPECT_RATIO_FIXES = [
+    ("src/globals.cpp", r"(int BetterSMS::getScreenRenderWidth\(\) \{\n)\s*switch \(gAspectRatioSetting\.getInt\(\)\) \{",
+     r"\1    return 600;\n    switch (gAspectRatioSetting.getInt()) {", "BSE lays out for 4:3"),
+    ("src/globals.cpp", r"(int BetterSMS::getScreenOrthoWidth\(\) \{\n)\s*switch \(gAspectRatioSetting\.getInt\(\)\) \{",
+     r"\1    return 640;\n    switch (gAspectRatioSetting.getInt()) {", "BSE lays out for 4:3"),
+    ("src/p_settings.hxx", r"(\n(\s*)~AspectRatioSetting\(\) override \{\}\n)",
+     r"\1\2bool isUnlocked() const override { return false; }\n",
+     "BSE's aspect ratio setting is hidden"),
+]
+
+ECLIPSE_FIXES = optional(TEXTURE_FIXES) + CARD_IMAGE_FIXES + PARTICLE_FIXES + DEBS_FIXES + [RAWDATA_FIX, RAWDATA_REGION_FIX] + BOOL_RET_FIXES + ECLIPSE_BE_FIXES + ECLIPSE_PATCH_TYPE_FIXES + [
     # A retail function taking TVec3f references, called through a (...) cast:
     # on the GameCube an aggregate in a variable argument list is passed by
     # address, so the callee's references see the objects. Pass the addresses.
@@ -297,11 +319,6 @@ ECLIPSE_FIXES = optional(TEXTURE_FIXES) + CARD_IMAGE_FIXES + PARTICLE_FIXES + DE
      "Eclipse's settings group knows its module"),
     ("src/main.cpp", r"BetterSMS::registerModule\(sModuleInfo\);", r"BetterSMS::registerModule(moduleInfo());",
      "Eclipse's settings group knows its module"),
-
-    # SunshineHeaderInterface named obj_hit_info's third field (May 2026);
-    # Eclipse still initialises it by its old placeholder name.
-    ("src/*/*.cpp", r"(obj_hit_info\s+\w+\s*=?\s*\{[^}]*?)\._08(\s*=)", r"\1.mVisualOfsY\2",
-     "obj_hit_info._08 is mVisualOfsY"),
 ]
 BSE_FIXES = TEXTURE_FIXES + CARD_IMAGE_FIXES + optional([RAWADDR_FIX]) + [RAWDATA_FIX, RAWDATA_REGION_FIX] + BSE_BE_FIXES + PATCH_TYPE_FIXES + [
     # BSE's free-fly camera, in place of CPolarSubCamera::perform's test of
@@ -311,6 +328,23 @@ BSE_FIXES = TEXTURE_FIXES + CARD_IMAGE_FIXES + optional([RAWADDR_FIX]) + [RAWDAT
     # vector after a cutscene (Delfino Plaza's opening ended rolled).
     ("src/debug/freeflycam.cpp", r"return \(graphics->_00\[1\] & 1\);", r"return (*(u16 *)graphics->_00 & 1);",
      "TGraphics' first-tick flag is the game's u16"),
+    # BSE only commits pending scenes after its built-in contexts. Eclipse's
+    # character select is a custom context (11); when an additional movie
+    # defers a scene change, leaving that menu must commit the destination
+    # before the stage handler reads mCurrentScene.
+    ("src/application.cpp",
+     r"if \(!sIsAdditionalMovie && app->mContext <= TApplication::CONTEXT_DIRECT_LEVEL_SELECT\) \{",
+     "if ((!sIsAdditionalMovie && app->mContext <= TApplication::CONTEXT_DIRECT_LEVEL_SELECT) ||\n"
+     "            (app->mContext > TApplication::CONTEXT_DIRECT_LEVEL_SELECT &&\n"
+     "             delayContext == TApplication::CONTEXT_DIRECT_STAGE)) {",
+     "custom menus commit the pending scene before entering gameplay"),
+    # getStageName explicitly returns nullptr for an absent archive entry.
+    # Loading optional stage parameters must keep defaults in that case,
+    # rather than feeding nullptr to the path builder (unlock crash log).
+    ("src/stage.cpp",
+     r"(void BetterSMS::Stage::TStageParams::load\(const char \*stageName\) \{\n)",
+     r"\1    if (!stageName) {\n        reset();\n        return;\n    }\n\n",
+     "missing stage names retain default parameters"),
     # The object table holds pointers, not words.
     ("src/object.cpp", r"sizeof\(u32\) \* ObjDataTableSize\);", r"sizeof(ObjData *) * ObjDataTableSize);",
      "the object table is copied a pointer per entry"),
@@ -361,7 +395,7 @@ BSE_FIXES = TEXTURE_FIXES + CARD_IMAGE_FIXES + optional([RAWADDR_FIX]) + [RAWDAT
      "BSE's console log formats its arguments"),
     ("src/logging.cpp", r"\bOSReport\(msg, vargs\);", r"sms_mod_vreport(msg, vargs);",
      "BSE's console log formats its arguments"),
-] + FRAME_RATE_FIXES
+] + FRAME_RATE_FIXES + ASPECT_RATIO_FIXES
 MOVESET_FIXES = optional(TEXTURE_FIXES + [RAWADDR_FIX]) + CARD_IMAGE_FIXES
 SHI_FIXES = BOOL_RET_FIXES + SHI_WORD_FIXES + SHI_GAME_TYPES + [
     # The SDK's OSMessage is a void *, as the port's OS keeps it; declared u32,
@@ -539,6 +573,11 @@ SHI_NATIVE_FLAG_FIXES = [
     # BetterSunshineEngine sets around its warps and menus.
     ("include/SMS/Player/MarioGamePad.hxx", r"struct \{\n" + FLAG_FIELDS + r"\} (?P<name>mState);",
      native_flags("u16"), "the game pad's flags use the game's numeric masks"),
+    # J3DFrameCtrl's u8 at 0x5 (mIsAnmDead 0x1, the game's
+    # STATE_COMPLETED_ONCE), which ends Eclipse's portal cast animation;
+    # natively it was 0x80, a bit the game never sets.
+    ("include/JSystem/J3D/J3DAnimation.hxx", r"struct \{\n" + FLAG_FIELDS + r"\} (?P<name>mAnimFlags);",
+     native_flags("u8"), "animation frame controls' flags use the game's numeric masks"),
 ]
 
 

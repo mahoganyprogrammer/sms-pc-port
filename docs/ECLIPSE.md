@@ -20,7 +20,7 @@ Counted with [`tools/mods/patch_inventory.py`](../tools/mods/patch_inventory.py)
 
 | | patches | game functions touched | of which `bl` redirects |
 | --- | --- | --- | --- |
-| Eclipse ([inventory](mods/eclipse-patches.md)) | 257 | 95 | 144 |
+| Eclipse ([inventory](mods/eclipse-patches.md)) | 280 | 110 | 160 |
 | BSE ([inventory](mods/bse-patches.md)) | 697 | 259 | 377 |
 
 Eclipse's own code is about 18,500 lines and calls 79 BSE API functions (most often `Spc::` script builtins, `Stage::register*Stage` and `add*Callback`, `Objects::registerObjectAs*`, `Player::add*Callback` and per-player data, `THP::addTHP`, `Music::`, `Settings::`).
@@ -91,6 +91,10 @@ For bisecting, `SMS_MOD_LIST=1` prints every registered patch and `SMS_MOD_DISAB
 
 ## Status (2026-10-01)
 
+- Piantissimo unlock continuation: BSE's pending-scene commit excluded custom contexts such as Eclipse's character select (11).
+  If a movie deferred the scene change, selecting a character could enter gameplay with the old scene, including an episode `0xFF` placeholder; `getStageName` then returned null and the parameter loader crashed.
+  `fixup_sources.py` commits the pending scene when a custom context returns to gameplay, preserving the last real previous scene, and makes a missing parameter archive name reset to defaults.
+  `python3 tools/mods/test_stage_transition.py BUILD/eclipse-src/bse --compiler clang++` checks the fetched, fixed-up transition and loader on both host widths, including preservation during additional movies and null/missing/present parameter names.
 - The 32- and 64-bit ports both run all three modules on the Eclipse disc: BSE's first-boot settings screen (saved to the memory card), Eclipse's title screen and file select, its Tutorial stage with its dialogue, HUD and the moveset, and its first stage.
   With the same input the two play the same run.
 - Rechecked after the maths, memory and decomp changes up to `a695da2`: a headless scripted run (`SMS_VI_DETERMINISTIC`, the settings saved by a first boot, then `SMS_AUTOPRESS` through the Tutorial's dialogue, a walk and a jump, the pause menu's Exit Area, and the title that follows) gives byte-identical frames in the 32- and 64-bit builds.
@@ -190,6 +194,14 @@ For bisecting, `SMS_MOD_LIST=1` prints every registered patch and `SMS_MOD_DISAB
   BSE's `initAreaInfo` reads the game's shine and stage tables by retail address through `SMS_PORT_REGION`, which the port did not route, so it read the game's heap (zeros): every base-game area had no scenarios and no select pane, and entering Bianco Hills crashed in `TSelectMenu::initData`. `fixup_sources.py` routes them to the port's tables (`rawdata.cpp`, `modhook-03-retail-area-tables`), with retail's bytes where BSE reads past `scShineTableDolpicEtc` and `shineStageTable`.
   For Eclipse's own stages (Erto Rock) `initData`'s last scenario-name lookup indexes `scScenarioNameTable` with -1, a 0 on the console and a fault 16 GiB away on a 64-bit host (`bounds-06`). `modhook-35-SelectMenu` calls the release's `clampSelectScreenEpisodesVisible`.
   BSE's free-fly camera tests `CPolarSubCamera::perform`'s first-tick flag as `graphics->_00[1]`, the low byte of the big-endian u16; natively that is always 0, so the camera never reset its up vector after a bck cutscene and Delfino Plaza's opening, played to its end, left the game camera rolled. `fixup_sources.py` reads the u16.
+- **Retail constants the mods overwrite** (2026-10-09). BSE's boot callback stores its shine count over TSunGlass's 120.0 (`.sdata2` 0x80412548) and Eclipse's green Yoshi lengthens the tongue through 0x80415F4C and 0x80415F68 (`TYoshiTongue`'s 300.0 attack radius and 10000.0 target distance), by address through `SMS_PORT_REGION`; in the port those addresses are in the game's heap, which they corrupted. They are variables now (`modhook-03-retail-constants-glare-tongue`) and the writes go to them (`rawdata.cpp`).
+- **Aspect ratio** (2026-10-09). The port widens the frame itself (widescreen setting) and maps the game's 4:3 coordinates into it; BSE's widescreen patches are waived. BSE's own Aspect Ratio setting still widened its menus' projections and moved their contents out (`getScreenRatioAdjustX`), so any value but 4:3 squeezed those menus into the 4:3 area and pushed Eclipse's pause menu Shine and blue coin counts off the left of the frame. `fixup_sources.py` has BSE always lay out for 4:3 and hides the setting (it stays in the save).
+- **The release's Eclipse** (2026-10-09). Eclipse is pinned at `792e14f` on upstream's `shadow_mario_portals` branch, the code the v1.1.0 disc ships (its module lacks the `[EMarioPortal] Received msg` report the branch's "v1.1.0 is done" commit, `d6a1ed6`, still has); the earlier pin, `5274979` on `main`, predates the release's last ten commits.
+  The disc's HUD layout has the release's Shadow Mario brush card (`sm_0` in `game_6/standard_1.blo`: a purple backing and an X button, 13 pixels left of the water gauge), which only the release's code hides for the other characters; with the old code it showed behind the FLUDD gauge in every stage, with a second blinking X button.
+  The release also brings Star Bits (StarGlow Road), Shadow Mario's portal casting with its reticle and brush card, persistent sunglasses, King Boo's light, the area cycling in the pause menu's tracker, and Fire Petey's fire breath as a particle callback in place of its fire actors.
+  Its new patch sites are hooked in `zz-modhook-60-eclipse-release` (the one at `0x802944F4`, in `setBlueCoinFlag`, which Eclipse replaces whole, is never reached).
+  Its portals tell live actors from others by a flag in padding byte 0xE, which on 64-bit hosts is `mPosition`'s first byte; `mods-port.patch` keeps the flag in the byte after `mPlacementFlags` (retail 0x1E), padding in every layout.
+  Its portal cast ends on `J3DFrameCtrl`'s `mIsAnmDead`, another bitfield SunshineHeaderInterface declares from the top bit down; `fixup_sources.py` reverses it as it does the other flag words.
 - **Patches.** Every patch of the three modules is either hooked or waived: `tools/mods/port_status.py` lists none left to do (widescreen and frame-rate patches are waived, the port has its own; six more sit in code the mods compile out, which `--registered` shows as inactive).
 - **Retail addresses and offsets in the mods' code.** Game data the mods reach by retail address goes to the port's objects ([rawdata.cpp](../platform/mods/eclipse/rawdata.cpp)); members they reach by retail offset go through `SMS_OFFSET`.
   A retail data address not listed there stops the game with a message naming it.
