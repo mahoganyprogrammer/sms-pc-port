@@ -51,6 +51,8 @@ uint32_t GXPC_FrameCount(void);              /* display copies so far */
 void GXPC_SetWindowIcon(const uint8_t* rgba, int w, int h);
 /* 1 while the window holds the mouse for mouse look (SMS_MOUSE_CAMERA). */
 int GXPC_MouseCaptured(void);
+/* 1 while the cheat menu (F9) is open: the PAD layer reports an idle controller. */
+int GXPC_GameInputBlocked(void);
 /* Widescreen: the displayed width over the GameCube's 4:3 (1 = off). Set
  * before the context exists; the EFB, the display and the window widen, and
  * draws map the game's 640-wide coordinates into it (see gx_render.cpp). The
@@ -74,6 +76,9 @@ float GXPC_GetWidescreen(void);
 union SDL_Event;
 void sms_gx_set_event_callback(void (*cb)(const union SDL_Event* ev));
 void sms_gx_pump_events(void);
+/* Rumble on the game controller last used (0 stops it, 65535 is full); calls
+ * that change nothing are cheap.  Returns 0 without a controller. */
+int sms_gx_rumble(unsigned short strength);
 
 /* Call once with an OpenGL 3.3 core context current (SDL, EGL, ...), before the
  * game calls GXInit.  efbScale multiplies the 640x528 EFB (1 = native; FSR 1's
@@ -84,9 +89,12 @@ void GXPC_Shutdown(void);
 
 /* Before endian conversion, discover HD replacements in BTI, J3D TEX1 and
  * JPA resources. Thread-safe; hashes synchronously and keeps no game pointers.
- * PreloadTextures drains those requests on the GL thread before gameplay. */
+ * PreloadTextures drains those requests on the GL thread before gameplay.
+ * PrepareStage, as a stage finishes loading, first compiles the shader
+ * programs that stage is known to draw with (the warm-up), then preloads. */
 void GXPC_PrefetchResource(const void* data, uint32_t size, const char* name);
 void GXPC_PreloadTextures(void);
+void GXPC_PrepareStage(int stage);
 
 /* 32-bit "physical" addresses appear inside command streams: display lists
  * built by GD/J3D carry texture, TLUT, vertex-array and EFB-copy addresses.

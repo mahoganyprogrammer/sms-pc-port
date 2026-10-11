@@ -243,6 +243,11 @@ uint32_t hiresUploadedCount();
 // compressed levels are still being made.
 struct HiresStats { size_t residentBytes, decodedBytes, pendingCount; uint32_t uploaded; size_t completing; };
 HiresStats hiresStats();
+extern uint64_t g_statHiresBytes;  // texture pack bytes sent to GL
+// The folder for the port's caches (shader programs, texture levels):
+// $XDG_CACHE_HOME/sms-port, ~/Library/Caches/sms-port, %LOCALAPPDATA%\sms-port
+// (made if missing), or empty.
+std::string userCacheDir();
 uint64_t xxh64(const void* data, size_t len, uint64_t seed);
 // Block compression (gx_bcenc.cpp) for the mip levels a texture pack leaves
 // out: one 4x4 block of RGBA pixels, row by row, into 8 bytes (BC1) or 16.
@@ -271,6 +276,19 @@ struct ShaderProgram {
 bool shaderHasEarlyFragmentTests();
 bool earlyZWritesRejected();
 const ShaderProgram* shaderForCurrentState(bool depthOnly = false);
+void shaderPrepareStage(int stage);  // while a stage loads: its programs (the warm-up)
+
+// ---------------------------------------------------------------- overlay panels
+// Each slot keeps its own texture, so panels drawn in the same frame keep their
+// cached bitmaps. GXPC_DrawOverlay draws the debug overlay's slot.
+enum OverlaySlot { OVERLAY_DEBUG, OVERLAY_CHEAT_MENU, OVERLAY_SLOTS };
+void drawOverlayPanel(OverlaySlot slot, const uint8_t* rgba, int w, int h, int x, int y, int scale, int winW, int winH);
+// Panel bitmaps (gx_overlay.cpp): RGBA8, w x h, row 0 at the top. Text shares
+// one scratch buffer, so panels are rasterised on the GL thread only.
+void overlayFillRect(std::vector<uint8_t>& px, int w, int h, int x0, int y0, int x1, int y1, const uint8_t c[4]);
+// stb_easy_font with its top-left at (x, y), each font pixel scale x scale.
+void overlayText(std::vector<uint8_t>& px, int w, int h, int x, int y, const char* text, const uint8_t c[4], int scale = 1);
+int overlayTextWidth(const char* text);  // in font pixels
 
 // ---------------------------------------------------------------- util
 uint64_t hashBytes(const void* data, size_t n, uint64_t seed = 0);

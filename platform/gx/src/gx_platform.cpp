@@ -5,6 +5,7 @@
 // surface.  GXInit brings this up automatically if the host has not called
 // GXPC_Init itself, and every GXCopyDisp presents the XFB to the window.
 #include "gx_internal.h"
+#include "gx_cheat_menu.h"
 #include "gx_glthread.h"
 #include "gx_window_layout.h"
 #include "sms_gx/gx_pc.h"
@@ -64,6 +65,12 @@ SDL_Window* s_window = nullptr;
 SDL_GLContext s_glctx = nullptr;
 void (*s_eventCb)(const SDL_Event*) = nullptr;
 std::vector<SDL_GameController*> s_pads;
+// sms_gx_rumble: the controller it goes to (the one last pressed or pushed,
+// else the first opened; -1 for none), the one rumbling now, and the last
+// strength sent with when.
+SDL_JoystickID s_rumblePad = -1, s_rumbling = -1;
+Uint16 s_rumbleSent = 0;
+Uint32 s_rumbleSentAt = 0;
 #endif
 std::vector<uint8_t> s_icon;  // GXPC_SetWindowIcon, RGBA8
 int s_iconW = 0, s_iconH = 0;
@@ -188,6 +195,24 @@ void setFullscreen(bool on) {
     }
     s_isFullscreen = on;
     SDL_ShowCursor(on ? SDL_DISABLE : SDL_ENABLE);
+}
+
+// The open cheat menu has a free cursor; closing it gives mouse look back the
+// capture it had.
+bool s_menuOpen = false, s_capturedBeforeMenu = false;
+
+void syncCheatMenuInput() {
+    const bool open = cheatMenuVisible();
+    if (open == s_menuOpen) return;
+    s_menuOpen = open;
+    if (open) {
+        s_capturedBeforeMenu = s_mouseCaptured;
+        captureMouse(false);
+        SDL_ShowCursor(SDL_ENABLE);
+        return;
+    }
+    SDL_ShowCursor(s_isFullscreen ? SDL_DISABLE : SDL_ENABLE);
+    if (s_capturedBeforeMenu && (SDL_GetWindowFlags(s_window) & SDL_WINDOW_INPUT_FOCUS)) captureMouse(true);
 }
 
 void applyIcon() {
@@ -625,6 +650,7 @@ int GXPC_MouseCaptured(void) {
     return 0;
 #endif
 }
+int GXPC_GameInputBlocked(void) { return cheatMenuVisible(); }
 int GXPC_IsHeadless(void) { return s_mode != MODE_WINDOW; }
 uint32_t GXPC_FrameCount(void) { return s_frame; }
 
@@ -694,6 +720,7 @@ void GXPC_Present(const void* xfb) {
             }
             GXPC_PresentXFB(xfb, w, h);
             GXPC_OverlayDraw(w, h);
+            cheatMenuRender(w, h);
             t1 = nowSeconds();
             if (hdr) hdrFramePresent(s_vsync != 0);
             else SDL_GL_SwapWindow(s_window);
@@ -745,6 +772,7 @@ static void noteInputDevice(const SDL_Event& ev) {
         return;
     }
     if (which < 0) return;
+    s_rumblePad = which;
     SDL_GameController* c = SDL_GameControllerFromInstanceID(which);
     if (!c) return;
     const char* name = SDL_GameControllerName(c);
@@ -757,11 +785,14 @@ void sms_gx_pump_events(void) {
     if (s_mode != MODE_WINDOW) return;
     SDL_Event ev;
     while (SDL_PollEvent(&ev)) {
-        noteInputDevice(ev);
+        if (!cheatMenuVisible()) noteInputDevice(ev);
         switch (ev.type) {
         case SDL_CONTROLLERDEVICEADDED:
             if (SDL_IsGameController(ev.cdevice.which)) {
-                if (SDL_GameController* c = SDL_GameControllerOpen(ev.cdevice.which)) s_pads.push_back(c);
+                if (SDL_GameController* c = SDL_GameControllerOpen(ev.cdevice.which)) {
+                    s_pads.push_back(c);
+                    if (s_rumblePad < 0) s_rumblePad = SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(c));
+                }
             }
             break;
         case SDL_CONTROLLERDEVICEREMOVED:
@@ -771,6 +802,12 @@ void sms_gx_pump_events(void) {
                     s_pads.erase(s_pads.begin() + long(i));
                     break;
                 }
+            if (s_rumbling == ev.cdevice.which) {
+                s_rumbling = -1;
+                s_rumbleSent = 0;
+            }
+            if (s_rumblePad == ev.cdevice.which)
+                s_rumblePad = s_pads.empty() ? -1 : SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(s_pads[0]));
             break;
         default:
             break;
@@ -780,7 +817,15 @@ void sms_gx_pump_events(void) {
             if (ev.type == SDL_KEYDOWN && !ev.key.repeat) GXPC_OverlayToggle();
             continue;
         }
-        if (s_mouseCamera) {
+        // F9 opens and closes the cheat menu and is kept from the pad layer
+        if ((ev.type == SDL_KEYDOWN || ev.type == SDL_KEYUP) && ev.key.keysym.scancode == SDL_SCANCODE_F9) {
+            if (ev.type == SDL_KEYDOWN && !ev.key.repeat) {
+                cheatMenuToggle();
+                syncCheatMenuInput();
+            }
+            continue;
+        }
+        if (s_mouseCamera && !cheatMenuVisible()) {
             if (ev.type == SDL_WINDOWEVENT && ev.window.event == SDL_WINDOWEVENT_FOCUS_LOST) captureMouse(false);
             if (ev.type == SDL_WINDOWEVENT && ev.window.event == SDL_WINDOWEVENT_FOCUS_GAINED && !s_mouseReleased)
                 captureMouse(true);
@@ -810,6 +855,11 @@ void sms_gx_pump_events(void) {
             if (!ev.key.repeat) GXPC_CycleSpeed();
             continue;
         }
+        // The cheat menu's own keys and clicks never reach the pad layer (Escape would quit)
+        if (cheatMenuHandleEvent(ev)) {
+            syncCheatMenuInput();
+            continue;
+        }
         if (s_eventCb) s_eventCb(&ev);
         if (ev.type == SDL_QUIT ||
             (ev.type == SDL_WINDOWEVENT && ev.window.event == SDL_WINDOWEVENT_CLOSE)) {
@@ -818,6 +868,32 @@ void sms_gx_pump_events(void) {
             exit(0);
         }
     }
+#endif
+}
+
+// Rumble on the controller in use (both motors at one strength). A call that
+// changes nothing sends nothing, as the game sets its motor every frame; a
+// rumble still on is sent again each second, each send lasting two, so a motor
+// left on by a stalled game stops by itself.
+int sms_gx_rumble(unsigned short strength) {
+#ifdef SMS_GX_HAVE_SDL2
+    SDL_GameController* c = s_rumblePad >= 0 ? SDL_GameControllerFromInstanceID(s_rumblePad) : nullptr;
+    if (s_rumbling >= 0 && s_rumbling != s_rumblePad) {  // the player picked up another controller
+        if (SDL_GameController* old = SDL_GameControllerFromInstanceID(s_rumbling))
+            SDL_GameControllerRumble(old, 0, 0, 0);
+        s_rumbling = -1;
+        s_rumbleSent = 0;
+    }
+    if (!c) return 0;
+    const Uint32 now = SDL_GetTicks();
+    if (strength == s_rumbleSent && (!strength || now - s_rumbleSentAt < 1000)) return 1;
+    s_rumbleSent = strength;
+    s_rumbleSentAt = now;
+    s_rumbling = strength ? s_rumblePad : -1;
+    return SDL_GameControllerRumble(c, strength, strength, strength ? 2000 : 0) == 0;
+#else
+    (void)strength;
+    return 0;
 #endif
 }
 

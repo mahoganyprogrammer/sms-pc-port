@@ -2,7 +2,8 @@
 // 2-4 are empty. Input arrives as SDL2 events through the GX layer's event
 // hook (sms_gx_set_event_callback / sms_gx_pump_events, weak here so the port
 // still links and runs without platform/gx). Bindings load from bindings.txt
-// (see README.md); SMS_BINDINGS=path overrides the location.
+// (see README.md); SMS_BINDINGS=path overrides the location. Controller 1's
+// rumble motor drives the controller in use (sms_gx_rumble).
 //
 // Only SDL2's stable event ABI is used (mirrored below), so this file needs no
 // SDL headers or library: the 32-bit build works without i386 SDL packages.
@@ -19,8 +20,14 @@
 // --- SDL2 event ABI (SDL_events.h, SDL_scancode.h, SDL_gamecontroller.h) ---
 namespace sdl {
 enum {
-	QUIT = 0x100, KEYDOWN = 0x300, KEYUP = 0x301, MOUSEMOTION = 0x400,
+	QUIT = 0x100, WINDOWEVENT = 0x200, KEYDOWN = 0x300, KEYUP = 0x301, MOUSEMOTION = 0x400,
 	CAXIS = 0x650, CBUTTONDOWN = 0x651, CBUTTONUP = 0x652
+};
+enum { WINDOWEVENT_FOCUS_GAINED = 12, WINDOWEVENT_FOCUS_LOST = 13 };
+struct WindowEvent {
+	u32 type, timestamp, windowID;
+	u8 event, p1, p2, p3;
+	s32 data1, data2;
 };
 struct MouseMotionEvent {
 	u32 type, timestamp, windowID, which, state;
@@ -50,8 +57,10 @@ struct ControllerButtonEvent {
 extern "C" {
 __attribute__((weak)) void sms_gx_set_event_callback(void (*cb)(const union SDL_Event* ev));
 __attribute__((weak)) void sms_gx_pump_events(void);
+__attribute__((weak)) int sms_gx_rumble(unsigned short strength);
 __attribute__((weak)) int GXPC_IsHeadless(void);
 __attribute__((weak)) int GXPC_MouseCaptured(void);
+__attribute__((weak)) int GXPC_GameInputBlocked(void);
 }
 
 // PC camera options, read by the camera code (decomp-patches/zzz-pc-camera.patch):
@@ -99,6 +108,7 @@ PWuInit pWuInit; PWuFree pWuFree; PWuWrite pWuWrite; PWuRead pWuRead; PWuPolicy 
 struct State {
 	volatile LONG present;
 	volatile LONG b1, b2, lx, ly, cx, cy, lt, rt; // raw bytes minus the power-on origin
+	volatile LONG rumble;                          // written by PADControlMotor
 };
 State g_state;
 
@@ -208,7 +218,18 @@ DWORD WINAPI poll_thread(void*)
 		int origin[4]  = { 128, 128, 128, 128 };
 		bool haveOrigin = false;
 		int slot        = -1; // the port feeding controller 1
+		int motor       = 0;  // the port whose motor runs, 1-4, or 0
 		for (;;) {
+			// Rumble: one byte per port after 0x11. The motors only run with
+			// the adapter's second (power) cable plugged in.
+			const int want = g_state.rumble && slot >= 0 ? slot + 1 : 0;
+			if (want != motor) {
+				UCHAR cmd[5] = { 0x11, 0, 0, 0, 0 };
+				if (want)
+					cmd[want] = 1;
+				pWuWrite(wu, 0x02, cmd, sizeof cmd, &n, NULL);
+				motor = want;
+			}
 			UCHAR rep[37];
 			n = 0;
 			if (!pWuRead(wu, 0x81, rep, sizeof rep, &n, NULL)) {
@@ -366,6 +387,50 @@ bool g_invert_cx, g_invert_cy;
 // mouse look (see above): its speed, and the motion not yet given to the camera
 float g_mouseSens = 1.0f;
 int g_mouseDX, g_mouseDY;
+// Input is ignored while another window has focus: SDL still reports
+// controllers then (SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS), so a controller used
+// in another app would also play the game. Losing focus releases everything
+// held; a button still down when focus returns counts once pressed again.
+// SMS_BACKGROUND_INPUT=1 keeps input live without focus (scripted presses too).
+// Starts focused, so a window system that never reports focus changes nothing.
+bool g_focused = true, g_backgroundInput;
+
+// Rumble. The GameCube's motor is only on or off: the game rumbles weakly by
+// running it on some frames only (RumbleMgr), and the controller plays it the
+// same way. SMS_RUMBLE=0 turns it off; SMS_RUMBLE_STRENGTH=percent scales it
+// (SDL controllers only: the GameCube adapter's motors are on or off too).
+u16 g_rumbleStrength = 0xFFFF;
+bool g_motor; // controller 1's motor, as the game last set it
+
+// Sends the motor's state, off while another window has focus.
+void update_rumble()
+{
+	const bool on = g_motor && g_focused && g_rumbleStrength;
+	if (sms_gx_rumble)
+		sms_gx_rumble(on ? g_rumbleStrength : 0);
+#ifdef _WIN32
+	InterlockedExchange(&gcad::g_state.rumble, on);
+#endif
+}
+
+void stop_rumble_at_exit()
+{
+	if (!g_motor)
+		return;
+	g_motor = false;
+	update_rumble();
+#ifdef _WIN32
+	Sleep(30); // for the adapter's thread to send it
+#endif
+}
+
+void release_all()
+{
+	memset(g_key, 0, sizeof g_key);
+	memset(g_axis, 0, sizeof g_axis);
+	memset(g_cbtn, 0, sizeof g_cbtn);
+	g_mouseDX = g_mouseDY = 0;
+}
 
 bool env_on(const char* name)
 {
@@ -470,6 +535,22 @@ void parse_bindings(const char* text, const char* source)
 void on_event(const union SDL_Event* ev)
 {
 	u32 type = *(const u32*)ev;
+	if (type == sdl::WINDOWEVENT) {
+		const sdl::WindowEvent* w = (const sdl::WindowEvent*)ev;
+		if (w->event == sdl::WINDOWEVENT_FOCUS_LOST && g_focused && !g_backgroundInput) {
+			g_focused = false;
+			release_all();
+			update_rumble();
+			port_log("[pad] window lost focus: ignoring input\n");
+		} else if (w->event == sdl::WINDOWEVENT_FOCUS_GAINED && !g_focused) {
+			g_focused = true;
+			update_rumble();
+			port_log("[pad] window has focus: input back on\n");
+		}
+		return;
+	}
+	if (!g_focused)
+		return;
 	switch (type) {
 	case sdl::KEYDOWN:
 	case sdl::KEYUP: {
@@ -553,6 +634,9 @@ void init()
 	port_free_camera    = env_on("SMS_FREE_CAMERA");
 	port_camera_speed_x = port_camera_speed_y = env_percent("SMS_CAMERA_SPEED", 0.1f, 4.0f);
 	g_mouseSens         = env_percent("SMS_MOUSE_SENSITIVITY", 0.05f, 10.0f);
+	g_backgroundInput   = env_on("SMS_BACKGROUND_INPUT") || env_on("SMS_AUTOPRESS");
+	if (g_backgroundInput)
+		port_log("[pad] input stays on while the window is in the background\n");
 	if (const char* e = getenv("SMS_SOFT_TRIGGER"))
 		if (*e) {
 			// stays below the click (250), or it would no longer be a soft press
@@ -560,6 +644,18 @@ void init()
 			g_softTrigger = pct * 255 / 100;
 			port_log("[pad] soft L/R press: %d%%\n", pct);
 		}
+	if (const char* e = getenv("SMS_RUMBLE"))
+		if (*e && !env_on("SMS_RUMBLE")) {
+			g_rumbleStrength = 0;
+			port_log("[pad] rumble off\n");
+		}
+	if (const char* e = getenv("SMS_RUMBLE_STRENGTH"))
+		if (*e && g_rumbleStrength) {
+			const int pct    = atoi(e) < 0 ? 0 : atoi(e) > 100 ? 100 : atoi(e);
+			g_rumbleStrength = (u16)(pct * 0xFFFF / 100);
+			port_log("[pad] rumble strength: %d%%\n", pct);
+		}
+	atexit(stop_rumble_at_exit);
 	if (port_free_camera || port_camera_speed_x != 1.0f)
 		port_log("[pad] camera: free camera %s, speed %d%%\n", port_free_camera ? "on" : "off",
 		         (int)(port_camera_speed_x * 100.0f + 0.5f));
@@ -693,8 +789,15 @@ extern "C" BOOL PADSync(void) { return TRUE; }
 extern "C" void PADSetSpec(u32) {}
 extern "C" void PADSetAnalogMode(u32) {}
 extern "C" void PADSetSamplingRate(unsigned long) {}
-extern "C" void PADControlMotor(s32, u32) {}
-extern "C" void PADControlAllMotors(const u32*) {}
+extern "C" void PADControlMotor(s32 chan, u32 command)
+{
+	if (chan != 0)
+		return;
+	init();
+	g_motor = command == PAD_MOTOR_RUMBLE;
+	update_rumble();
+}
+extern "C" void PADControlAllMotors(const u32* commands) { PADControlMotor(0, commands[0]); }
 
 extern "C" __attribute__((weak)) int port_trace_pad_read(struct PADStatus* status);
 
@@ -715,6 +818,8 @@ extern "C" u32 PADRead(PADStatus* status)
 		memset(&status[i], 0, sizeof status[i]);
 		status[i].err = i == 0 ? PAD_ERR_NONE : PAD_ERR_NO_CONTROLLER;
 	}
+	if (GXPC_GameInputBlocked && GXPC_GameInputBlocked())
+		return PAD_CHAN0_BIT;
 	PADStatus& s = status[0];
 	u16 b        = 0;
 	static const struct {
@@ -744,7 +849,7 @@ extern "C" u32 PADRead(PADStatus* status)
 #ifdef _WIN32
 	// Native GameCube adapter report (see gcad above): buttons, sticks, triggers.
 	int gcx = 0, gcy = 0, gccx = 0, gccy = 0;
-	if (gcad::g_state.present) {
+	if (gcad::g_state.present && g_focused) {
 		int b1 = gcad::g_state.b1, b2 = gcad::g_state.b2;
 		if (b1 & 0x01) b |= PAD_BUTTON_A;
 		if (b1 & 0x02) b |= PAD_BUTTON_B;

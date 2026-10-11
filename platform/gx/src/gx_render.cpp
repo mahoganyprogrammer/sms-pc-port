@@ -42,12 +42,12 @@ double g_presentWaited = 0, g_presentDrain = 0;
 static double (*s_idleClock)(void) = nullptr;
 static double nowSeconds() { return monoSeconds(); }
 // The breakdown timers (textures, draws, copies, peeks, GPU waits, the vertex
-// loader) run with SMS_GX_STATS or while the overlay is open
-// (GXPC_SetDetailedTimers). Otherwise only the overall sms_gx time is
+// loader) run with SMS_GX_STATS or SMS_GX_HITCH_MS or while the overlay is
+// open (GXPC_SetDetailedTimers). Otherwise only the overall sms_gx time is
 // measured; the others cost a clock read per texture bind and per primitive.
 static bool statsEnv() {
     const char* e = getenv("SMS_GX_STATS");
-    return e && atoi(e) > 0;
+    return (e && atoi(e) > 0) || getenv("SMS_GX_HITCH_MS");
 }
 bool g_gxStats = statsEnv();
 struct GxTimer {
@@ -123,8 +123,8 @@ static GLuint s_vao;
 static GLuint s_copyProg, s_copyVao;
 static GLint s_copyUMode, s_copyURect, s_copyUAlphaOne;
 static GLuint s_tmpFbo;
-static GLuint s_overlayTex;
-static int s_overlayW = 0, s_overlayH = 0;
+static GLuint s_overlayTex[OVERLAY_SLOTS];
+static int s_overlayW[OVERLAY_SLOTS], s_overlayH[OVERLAY_SLOTS];
 static GLuint s_overlayProg;
 static GLint s_overlayRect, s_overlayWindow;
 static GXPCStats s_lastFrameStats;
@@ -1711,6 +1711,34 @@ static void statsFrame() {
     gx0 = s_gxSeconds + g_decodeSeconds;
 }
 
+// SMS_GX_HITCH_MS=n: logs each display frame longer than n ms with what it
+// spent: draw-time shader compiles, texture uploads (and texture pack bytes
+// sent), time making batches (where compiles fall), and waiting for the GL
+// thread.
+static void hitchFrame() {
+    static double limit = -1, last = 0, flush0 = 0, wait0 = 0;
+    static uint32_t compiles0 = 0, uploads0 = 0;
+    static uint64_t hires0 = 0;
+    if (limit < 0) {
+        const char* e = getenv("SMS_GX_HITCH_MS");
+        limit = e ? atof(e) / 1000.0 : 0;
+    }
+    if (limit <= 0) return;
+    const double now = nowSeconds(), waited = glt::waitedSeconds();
+    if (last > 0 && now - last > limit)
+        logmsg("hitch: frame %u took %.1f ms: %u shader compiles, %u texture uploads (%.1f MiB from the texture pack), "
+               "%.1f ms in batches, %.1f ms waiting for the GL thread",
+               g_displayFrames, (now - last) * 1000.0, g_statShaderCompiles - compiles0, g_statTexUploads - uploads0,
+               double(g_statHiresBytes - hires0) / (1 << 20), (g_flushSeconds - flush0) * 1000.0,
+               (waited - wait0) * 1000.0);
+    last = now;
+    flush0 = g_flushSeconds;
+    wait0 = waited;
+    compiles0 = g_statShaderCompiles;
+    uploads0 = g_statTexUploads;
+    hires0 = g_statHiresBytes;
+}
+
 // Asynchronous GPU reads. Every synchronous read (glReadPixels into client
 // memory, a query result) makes the CPU wait for all queued GPU work, which on
 // a real GPU serialises the two. Reads the game makes every frame are answered
@@ -2559,6 +2587,7 @@ static void copyEfb(uint32_t ctrl) {
         g_displayFrames++;
         traceFrameAdvance();
         statsFrame();
+        hitchFrame();
         s_lastFrameStats = s_stats;
         s_stats.draws = s_stats.vertices = s_stats.efbCopies = 0;
     }
@@ -2607,14 +2636,25 @@ void GXPC_PreloadTextures(void) {
     hiresPreload();
 }
 
+void GXPC_PrepareStage(int stage) {
+    if (!s_ready) return;
+    flushBatch();
+    glcInvalidate();
+    shaderPrepareStage(stage);
+    hiresPreload();
+}
+
 void GXPC_Shutdown(void) {
     if (!s_ready) return;
     textureShutdown();
     shaderShutdown();
-    if (s_overlayTex) glDeleteTextures(1, &s_overlayTex);
+    for (int i = 0; i < OVERLAY_SLOTS; i++) {
+        if (s_overlayTex[i]) glDeleteTextures(1, &s_overlayTex[i]);
+        s_overlayTex[i] = 0;
+        s_overlayW[i] = s_overlayH[i] = 0;
+    }
     if (s_overlayProg) glDeleteProgram(s_overlayProg);
-    s_overlayTex = s_overlayProg = 0;
-    s_overlayW = s_overlayH = 0;
+    s_overlayProg = 0;
     invalidateOverlay();
     for (auto& kv : s_xfbs) glDeleteTextures(1, &kv.second.tex);
     s_xfbs.clear();
@@ -2705,13 +2745,14 @@ static uint32_t peekSync(int x, int y, bool depth) {
     return uint32_t(px[0]) | uint32_t(px[1]) << 8 | uint32_t(px[2]) << 16 | uint32_t(px[3]) << 24;
 }
 
-// A frame's peek snapshot is read at 1x: with a larger EFB scale the EFB is
-// first blitted (nearest) into this buffer, so a read stays 1.3 MiB.
+// A frame's peek snapshot is read at 1x: the EFB is first blitted (nearest)
+// into this buffer, so a read stays 1.3 MiB. At scale 1 too: reading the EFB
+// itself into a pixel buffer, while the game goes on drawing into it, garbled
+// the whole picture into blocks on Intel's Windows driver (HD 530, 21.20).
 static GLuint s_peekFbo, s_peekColor, s_peekDepth;
 
 static GLuint peekSource(bool depth) {
     const GLbitfield bits = depth ? GL_DEPTH_BUFFER_BIT : GL_COLOR_BUFFER_BIT;
-    if (s_scale == 1.0f) return efbReadFbo(0, 0, INT32_MAX, INT32_MAX, bits);
     if (!s_peekFbo) {
         glGenRenderbuffers(1, &s_peekColor);
         glBindRenderbuffer(GL_RENDERBUFFER, s_peekColor);
@@ -2951,8 +2992,14 @@ void GXPC_SetDetailedTimers(int on) { g_gxStats = on || statsEnv(); }
 void GXPC_SetIdleClock(double (*idleSeconds)(void)) { s_idleClock = idleSeconds; }
 
 void GXPC_DrawOverlay(const uint8_t* rgba, int w, int h, int x, int y, int scale, int winW, int winH) {
+    drawOverlayPanel(OVERLAY_DEBUG, rgba, w, h, x, y, scale, winW, winH);
+}
+
+}  // extern "C"
+
+void gx::drawOverlayPanel(OverlaySlot slot, const uint8_t* rgba, int w, int h, int x, int y, int scale, int winW, int winH) {
     if (!s_ready || w <= 0 || h <= 0) return;
-    if (!rgba && (!s_overlayTex || w != s_overlayW || h != s_overlayH)) return;
+    if (!rgba && (!s_overlayTex[slot] || w != s_overlayW[slot] || h != s_overlayH[slot])) return;
     flushBatch();
     glcInvalidate();
     // glBlitFramebuffer ignores alpha, so draw the panel with source-alpha blending.
@@ -3007,19 +3054,19 @@ void main() { o_color = texture(u_color, v_uv); }
     glGetIntegerv(GL_BLEND_EQUATION_ALPHA, &eqAlpha);
     glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
-    if (!s_overlayTex) {
-        glGenTextures(1, &s_overlayTex);
-        glBindTexture(GL_TEXTURE_2D, s_overlayTex);
+    if (!s_overlayTex[slot]) {
+        glGenTextures(1, &s_overlayTex[slot]);
+        glBindTexture(GL_TEXTURE_2D, s_overlayTex[slot]);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     } else {
-        glBindTexture(GL_TEXTURE_2D, s_overlayTex);
+        glBindTexture(GL_TEXTURE_2D, s_overlayTex[slot]);
     }
     if (rgba) {
-        if (w != s_overlayW || h != s_overlayH) {
+        if (w != s_overlayW[slot] || h != s_overlayH[slot]) {
             glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
-            s_overlayW = w;
-            s_overlayH = h;
+            s_overlayW[slot] = w;
+            s_overlayH[slot] = h;
         } else {
             glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
         }
@@ -3065,6 +3112,8 @@ void main() { o_color = texture(u_color, v_uv); }
     if (clip0) glEnable(GL_CLIP_DISTANCE0);
     if (clip1) glEnable(GL_CLIP_DISTANCE1);
 }
+
+extern "C" {
 
 void GXPC_GetStats(GXPCStats* out) {
     *out = s_stats;

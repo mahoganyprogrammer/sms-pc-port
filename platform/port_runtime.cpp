@@ -712,6 +712,8 @@ static const struct {
 	{ "texture_pack_mb", "SMS_TEXTURE_PACK_MB" },
 	{ "texture_pack_preload", "SMS_TEXTURE_PACK_PRELOAD" },
 	{ "texture_pack_pending_mb", "SMS_TEXTURE_PACK_PENDING_MB" },
+	{ "texture_pack_upload_mb", "SMS_TEXTURE_PACK_UPLOAD_MB" },
+	{ "shader_warmup", "SMS_GX_SHADER_WARMUP" },
 	{ "hd_cutscenes", "SMS_HD_CUTSCENES" }, // follows HD textures; 0 disables
 	{ "widescreen", "SMS_WIDESCREEN" },
 	{ "widescreen_hud", "SMS_WIDESCREEN_HUD" }, // centre or edges
@@ -755,6 +757,9 @@ static const struct {
 	{ "free_camera", "SMS_FREE_CAMERA" },             // no automatic swing back
 	{ "mouse_camera", "SMS_MOUSE_CAMERA" },           // mouse look
 	{ "mouse_sensitivity", "SMS_MOUSE_SENSITIVITY" }, // percent
+	{ "background_input", "SMS_BACKGROUND_INPUT" },   // keep input while another window has focus
+	{ "rumble", "SMS_RUMBLE" },                       // controller rumble, on by default
+	{ "rumble_strength", "SMS_RUMBLE_STRENGTH" },     // percent
 };
 
 static void load_settings()
