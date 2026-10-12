@@ -83,6 +83,7 @@ Options can be kept in [`settings.txt`](settings.txt) (`resolution = 2`, `textur
 | Option | Effect |
 | --- | --- |
 | `SMS_SKIP_MOVIES=1` | skip cutscenes; keep portal animations playing |
+| `SMS_LANGUAGE=fr` | play in French, German (`de`), Spanish (`es`) or Italian (`it`) instead of English (`en`, the default), with that [language pack](#languages) installed |
 | `SMS_HEAT_HAZE=0` | turn off the heat-wave shimmer that distorts the picture in sunny areas |
 | `SMS_BUTTON_PROMPTS=style` | the buttons shown in the game's text and on the FLUDD gauge: `gamecube` (the game's own, the default), `xbox`, `playstation`, `steamdeck`, `keyboard`, or `auto` (keyboard and mouse or the controller in use) |
 | `SMS_BUTTON_PROMPT_PAD=style` | with `auto`, how every controller's prompts look: `xbox`, `playstation`, `steamdeck` or `gamecube` (default: match the controller) |
@@ -102,7 +103,7 @@ Options can be kept in [`settings.txt`](settings.txt) (`resolution = 2`, `textur
 | `SMS_OVERLAY=1` | open the debug overlay at start |
 | `SMS_GX_SCALE=n` | render at n times the GameCube's resolution |
 | `SMS_ANISO=n` | anisotropic filtering, 2 to 16 (up to what the GPU supports), for sharper textures at glancing angles; textures whose mipmap levels are an effect (such as the sea's sparkles) keep the GameCube's level of detail |
-| `SMS_FULLSCREEN=1` | borderless fullscreen at the desktop's resolution; `exclusive` switches the display to `SMS_FULLSCREEN_MODE=WxH@Hz` (else the desktop's mode; on a monitor with Windows HDR on it stays borderless, since a mode switch can leave HDR's colours wrong). F11 or Alt+Enter toggles fullscreen while playing |
+| `SMS_FULLSCREEN=1` | borderless fullscreen at the desktop's resolution (on Windows, an undecorated normal window, without an SDL fullscreen transition); `exclusive` switches the display to `SMS_FULLSCREEN_MODE=WxH@Hz` (else the desktop's mode; on a monitor with Windows HDR on it stays borderless, since a mode switch can leave HDR's colours wrong). F11 or Alt+Enter toggles fullscreen while playing |
 | `SMS_DISPLAY=n` | the monitor to open on (0 is the primary one; by default, the one under the mouse) |
 | `SMS_VSYNC=1` | wait for the display's refresh; `adaptive` shows a late frame at once instead of waiting a whole refresh |
 | `SMS_MSAA=n` | multisample anti-aliasing with 2, 4 or 8 samples (up to what the GPU supports) |
@@ -161,7 +162,13 @@ GameCube adapters work too. On Windows, an adapter in Wii U mode (Nintendo WUP-0
 | D-pad | 1 2 3 4 (up, down, left, right) or keypad 8 2 4 6 |
 | Debug overlay (frame rate, stats, keys) | ` (backtick) |
 | Game and movie speed x1 / x2 / x4 / x10 (overlay open) | F7 |
+| Warp menu (debug overlay open) | F8, or a controller's Back/Select button |
 | Quit | Esc |
+
+The warp menu lists every stage on the disc (Eclipse's too) and, under each, its episodes and secret courses with their names and scene files; picking one warps there straight away, as a pipe or the pause menu's Exit Area would, without the Shines that would unlock it.
+It warps while a stage is playing (not during a cutscene, dialogue or the pause menu); the game keeps running behind it but reads no input.
+Arrow keys or the d-pad (or the left stick) move, Enter or A opens a stage and warps, Esc, Backspace or B goes back; LB/RB and Page Up/Down skip a page, and the mouse works too.
+F8 and Back/Select open it only while the debug overlay (`` ` ``) is open; otherwise they are ordinary keys and buttons, so `PAD_BACK` can still be bound to a game control (it then opens the menu instead while the overlay is open).
 
 To change them, edit [`bindings.txt`](bindings.txt) (`CONTROL = KEY KEY ...`, one control per line; a line replaces that control's defaults), or point `SMS_BINDINGS` at another file.
 
@@ -205,6 +212,13 @@ docs/                 developer documentation and reference screenshots
 - `platform/*/README.md`: each platform module in detail.
 
 The standalone build contains the whole game, so keep it to yourself: sharing it is sharing the game.
+
+## Languages
+
+The North American disc is in English; the European release adds French, German, Spanish and Italian.
+A language pack holds one of those languages' text and menus, taken from the European disc, for this port to play with your North American one: dialogue, cutscene subtitles, signs, menus, the HUD, the title screen and the memory card screens.
+`python3 tools/mods/get.py language fr` installs the French pack in `mods/languages/fr` (`de`, `es`, `it` for the others), and `language = fr` in `settings.txt` (or `SMS_LANGUAGE=fr`) plays in it; SMS Launcher does both from its Language setting.
+Saves are the same in every language. The packs are made with the scripts in [sms-hd-texture-extras](https://github.com/chasem-dev/sms-hd-texture-extras#language-packs); [mods/README.md](mods/README.md#languages-language-packs) describes their layout.
 
 ## HD cutscenes
 
